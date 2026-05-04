@@ -1,0 +1,123 @@
+name: macOS noVNC Desktop
+
+on:
+  workflow_dispatch:
+
+jobs:
+  macos:
+    name: "Run on the fastest infrastructure"
+    runs-on: ghcr.io/cirruslabs/macos-runner:tahoe
+    timeout-minutes: 360
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: List Installed Xcodes
+        run: xcodes installed
+
+      - name: Select Xcode 16.2
+        run: sudo xcodes select 16.2
+
+      - name: Install noVNC dependencies
+        run: |
+          brew update
+          brew install novnc websockify cloudflared
+
+      - name: Enable macOS Screen Sharing / VNC
+        run: |
+          set -eux
+
+          CURRENT_USER="$(whoami)"
+          VNC_PASSWORD="$(openssl rand -base64 18)"
+
+          echo "VNC_USER=$CURRENT_USER" >> "$GITHUB_ENV"
+          echo "VNC_PASSWORD=$VNC_PASSWORD" >> "$GITHUB_ENV"
+
+          # Set a temporary password for the runner user.
+          sudo sysadminctl \
+            -adminUser "$CURRENT_USER" \
+            -adminPassword "" \
+            -resetPasswordFor "$CURRENT_USER" \
+            -newPassword "$VNC_PASSWORD" || true
+
+          # Enable Remote Management / Screen Sharing.
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
+            -activate \
+            -configure \
+            -access -on \
+            -users "$CURRENT_USER" \
+            -privs -all \
+            -restart -agent \
+            -menu
+
+          # Enable legacy VNC password access.
+          sudo defaults write /Library/Preferences/com.apple.VNCSettings.plist VNCLegacyConnectionsEnabled -bool true
+
+          # Store VNC password in the Apple VNC format.
+          perl -we '
+            use Crypt::CBC;
+            my $password = $ENV{"VNC_PASSWORD"};
+            my $key = pack("H*", "1734516E8BA8C5E2FF1C39567390ADCA");
+            my $cipher = Crypt::CBC->new(
+              -key => $key,
+              -cipher => "DES",
+              -iv => "\0\0\0\0\0\0\0\0",
+              -header => "none",
+              -literal_key => 1,
+              -padding => "space"
+            );
+            print $cipher->encrypt(substr($password . "        ", 0, 8));
+          ' | sudo tee /Library/Preferences/com.apple.VNCSettings.txt >/dev/null || true
+
+          sudo chmod 600 /Library/Preferences/com.apple.VNCSettings.txt || true
+
+          # Restart Screen Sharing service.
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
+            -restart -agent
+
+      - name: Start noVNC on port 6080
+        run: |
+          set -eux
+
+          # noVNC web UI will run at http://localhost:6080/vnc.html
+          nohup websockify \
+            --web=/opt/homebrew/share/novnc \
+            6080 \
+            localhost:5900 \
+            > novnc.log 2>&1 &
+
+          sleep 3
+
+          echo "noVNC is running locally on port 6080"
+          echo "VNC user: $VNC_USER"
+          echo "VNC password: $VNC_PASSWORD"
+
+      - name: Create public noVNC tunnel
+        run: |
+          set -eux
+
+          nohup cloudflared tunnel \
+            --url http://localhost:6080 \
+            --no-autoupdate \
+            > cloudflared.log 2>&1 &
+
+          sleep 10
+
+          echo "=============================="
+          echo "noVNC Desktop Access"
+          echo "=============================="
+          grep -o 'https://[-a-zA-Z0-9.]*\.trycloudflare.com' cloudflared.log | head -n 1 | tee novnc-url.txt
+          echo ""
+          echo "Open the URL above, then use:"
+          echo "Path: /vnc.html"
+          echo "VNC host: localhost"
+          echo "VNC port: 5900"
+          echo "Username: $VNC_USER"
+          echo "Password: $VNC_PASSWORD"
+          echo "=============================="
+
+      - name: Keep desktop alive
+        run: |
+          echo "Keeping the noVNC desktop alive for 6 hours..."
+          echo "Open the Cloudflare URL printed above and go to /vnc.html"
+          sleep 21600
