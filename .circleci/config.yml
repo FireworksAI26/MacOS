@@ -1,0 +1,22 @@
+version: 2.1
+
+jobs:
+  test-m4-pro-macos:
+    macos:
+      xcode: 16.4.0
+    resource_class: m4pro.medium
+    steps:
+      - checkout
+      - run:
+          name: Show Mac info
+          command: |
+            sw_vers
+            uname -a
+            system_profiler SPHardwareDataType || true
+            xcodebuild -version
+            echo "CircleCI hosted M4 Pro Mac works"
+
+workflows:
+  test:
+    jobs:
+      - test-m4-pro-macos
