@@ -1,12 +1,14 @@
 version: 2.1
 
 jobs:
-  test-m4-pro-macos:
+  macos-novnc:
     macos:
       xcode: 16.4.0
     resource_class: m4pro.medium
+
     steps:
       - checkout
+
       - run:
           name: Show Mac info
           command: |
@@ -14,9 +16,95 @@ jobs:
             uname -a
             system_profiler SPHardwareDataType || true
             xcodebuild -version
-            echo "CircleCI hosted M4 Pro Mac works"
+
+      - run:
+          name: Install noVNC, websockify, and cloudflared
+          command: |
+            brew update
+            brew install cloudflared python3
+
+            python3 -m pip install --user websockify
+
+            git clone https://github.com/novnc/noVNC.git "$HOME/noVNC"
+
+      - run:
+          name: Enable macOS VNC / Screen Sharing
+          command: |
+            export VNC_PASSWORD="${VNC_PASSWORD:-circleci123}"
+
+            echo "Using VNC password: $VNC_PASSWORD"
+
+            sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
+              -activate \
+              -configure \
+              -access -on \
+              -users "$USER" \
+              -privs -all \
+              -restart \
+              -agent \
+              -menu
+
+            sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
+              -configure \
+              -clientopts \
+              -setvnclegacy -vnclegacy yes \
+              -setvncpw -vncpw "$VNC_PASSWORD"
+
+            sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
+              -restart -agent
+
+            echo "VNC should now be listening on localhost:5900"
+            lsof -i :5900 || true
+
+      - run:
+          name: Start noVNC
+          command: |
+            export PATH="$HOME/Library/Python/3.*/bin:$PATH"
+
+            nohup python3 -m websockify \
+              --web "$HOME/noVNC" \
+              6080 \
+              localhost:5900 \
+              > "$HOME/novnc.log" 2>&1 &
+
+            sleep 5
+
+            echo "noVNC should be running on localhost:6080"
+            lsof -i :6080 || true
+            cat "$HOME/novnc.log" || true
+
+      - run:
+          name: Start public Cloudflare tunnel
+          command: |
+            nohup cloudflared tunnel \
+              --url http://localhost:6080 \
+              --no-autoupdate \
+              > "$HOME/cloudflared.log" 2>&1 &
+
+            echo "Waiting for Cloudflare tunnel URL..."
+            sleep 10
+
+            cat "$HOME/cloudflared.log" || true
+
+            echo ""
+            echo "=================================================="
+            echo "Open the trycloudflare.com URL above in your browser."
+            echo "VNC password: ${VNC_PASSWORD:-circleci123}"
+            echo "=================================================="
+            echo ""
+
+      - run:
+          name: Keep VM alive
+          no_output_timeout: 30m
+          command: |
+            echo "Keeping CircleCI macOS VM alive for noVNC..."
+            echo "Stop the job manually when finished."
+            while true; do
+              date
+              sleep 60
+            done
 
 workflows:
   test:
     jobs:
-      - test-m4-pro-macos
+      - macos-novnc
