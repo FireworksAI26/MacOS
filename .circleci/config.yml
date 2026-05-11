@@ -47,9 +47,8 @@ jobs:
             echo "Installed noVNC and websockify."
 
       - run:
-          name: Enable macOS Screen Sharing / VNC
+          name: Enable macOS Screen Sharing and VNC
           command: |
-            # macOS legacy VNC passwords should be 8 characters or fewer.
             export VNC_PASSWORD="ci123456"
 
             echo "Using internal VNC password: $VNC_PASSWORD"
@@ -69,7 +68,7 @@ jobs:
               -configure \
               -clientopts \
               -setvnclegacy -vnclegacy yes \
-              -setvncpw -vncpw "$VNC_PASSWORD"
+              -setvncpw "$VNC_PASSWORD"
 
             sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
               -restart -agent
@@ -77,68 +76,6 @@ jobs:
             echo ""
             echo "Checking VNC port 5900:"
             lsof -i :5900 || true
-
-      - run:
-          name: Create no-password noVNC launcher page
-          command: |
-            python3 -c '
-from pathlib import Path
-
-html = """<!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8">
-    <title>CircleCI macOS noVNC</title>
-    <style>
-      body {
-        margin: 0;
-        background: #0b1020;
-        color: white;
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-        display: flex;
-        min-height: 100vh;
-        align-items: center;
-        justify-content: center;
-        text-align: center;
-      }
-      .box {
-        max-width: 720px;
-        padding: 32px;
-      }
-      a {
-        color: #8ab4ff;
-        font-size: 20px;
-      }
-      code {
-        background: #1f2937;
-        padding: 4px 8px;
-        border-radius: 6px;
-      }
-    </style>
-  </head>
-  <body>
-    <div class="box">
-      <h1>Opening CircleCI macOS VM...</h1>
-      <p>This page should auto-connect to noVNC.</p>
-      <p>If it does not open automatically, click:</p>
-      <p>
-        <a href="/vnc.html?autoconnect=true&resize=scale&password=ci123456">
-          Open noVNC
-        </a>
-      </p>
-      <p>If it still asks for a password, use <code>ci123456</code>.</p>
-    </div>
-
-    <script>
-      window.location.href = "/vnc.html?autoconnect=true&resize=scale&password=ci123456";
-    </script>
-  </body>
-</html>
-"""
-
-Path.home().joinpath("noVNC", "index.html").write_text(html)
-print("Created launcher at ~/noVNC/index.html")
-'
 
       - run:
           name: Start noVNC server
@@ -168,8 +105,11 @@ print("Created launcher at ~/noVNC/index.html")
 
             echo "Waiting for Cloudflare tunnel URL..."
 
+            TUNNEL_URL=""
+
             for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
               sleep 5
+
               TUNNEL_URL=$(grep -o 'https://[-a-zA-Z0-9.]*\.trycloudflare\.com' "$HOME/cloudflared.log" | head -n 1 || true)
 
               if [ -n "$TUNNEL_URL" ]; then
@@ -193,16 +133,13 @@ print("Created launcher at ~/noVNC/index.html")
 
             if [ -n "$TUNNEL_URL" ]; then
               echo ""
-              echo "Open this URL:"
-              echo "$TUNNEL_URL"
-              echo ""
-              echo "Direct noVNC URL:"
+              echo "Open this direct noVNC URL:"
               echo "$TUNNEL_URL/vnc.html?autoconnect=true&resize=scale&password=ci123456"
               echo ""
-              echo "Lite noVNC URL:"
-              echo "$TUNNEL_URL/vnc_lite.html?password=ci123456"
+              echo "If the direct link fails, open this:"
+              echo "$TUNNEL_URL/vnc_lite.html"
               echo ""
-              echo "If it asks for a password, use:"
+              echo "Fallback password:"
               echo "ci123456"
               echo ""
             else
@@ -219,7 +156,7 @@ print("Created launcher at ~/noVNC/index.html")
           no_output_timeout: 30m
           command: |
             echo "Keeping CircleCI macOS VM alive for noVNC."
-            echo "Stop/cancel this job manually when finished."
+            echo "Stop or cancel this job manually when finished."
             echo ""
 
             while true; do
