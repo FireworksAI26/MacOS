@@ -14,6 +14,8 @@ jobs:
           command: |
             sw_vers
             uname -a
+            whoami
+            echo "$USER"
             system_profiler SPHardwareDataType || true
             xcodebuild -version
 
@@ -25,14 +27,17 @@ jobs:
 
             python3 -m pip install --user websockify
 
+            rm -rf "$HOME/noVNC"
             git clone https://github.com/novnc/noVNC.git "$HOME/noVNC"
 
       - run:
           name: Enable macOS VNC / Screen Sharing
           command: |
-            export VNC_PASSWORD="${VNC_PASSWORD:-circleci123}"
+            # macOS VNC legacy passwords should be 8 chars or fewer
+            export VNC_PASSWORD="ci123456"
 
-            echo "Using VNC password: $VNC_PASSWORD"
+            echo "Using internal VNC password: $VNC_PASSWORD"
+            echo "Current user: $USER"
 
             sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
               -activate \
@@ -53,8 +58,59 @@ jobs:
             sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
               -restart -agent
 
-            echo "VNC should now be listening on localhost:5900"
+            echo "Checking VNC port:"
             lsof -i :5900 || true
+
+      - run:
+          name: Create passwordless noVNC launcher
+          command: |
+            cat > "$HOME/noVNC/index.html" <<'EOF'
+            <!doctype html>
+            <html>
+              <head>
+                <meta charset="utf-8">
+                <title>CircleCI macOS noVNC</title>
+                <style>
+                  body {
+                    margin: 0;
+                    background: #0b1020;
+                    color: white;
+                    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+                    display: flex;
+                    min-height: 100vh;
+                    align-items: center;
+                    justify-content: center;
+                    text-align: center;
+                  }
+                  .box {
+                    max-width: 720px;
+                    padding: 32px;
+                  }
+                  a {
+                    color: #8ab4ff;
+                    font-size: 20px;
+                  }
+                </style>
+              </head>
+              <body>
+                <div class="box">
+                  <h1>Opening CircleCI macOS VM...</h1>
+                  <p>If it does not open automatically, click below:</p>
+                  <p>
+                    <a href="/vnc.html?autoconnect=true&resize=scale&password=ci123456">
+                      Open noVNC
+                    </a>
+                  </p>
+                </div>
+
+                <script>
+                  window.location.href = "/vnc.html?autoconnect=true&resize=scale&password=ci123456";
+                </script>
+              </body>
+            </html>
+            EOF
+
+            echo "Created noVNC launcher page."
 
       - run:
           name: Start noVNC
@@ -69,8 +125,10 @@ jobs:
 
             sleep 5
 
-            echo "noVNC should be running on localhost:6080"
+            echo "Checking noVNC port:"
             lsof -i :6080 || true
+
+            echo "noVNC logs:"
             cat "$HOME/novnc.log" || true
 
       - run:
@@ -82,14 +140,22 @@ jobs:
               > "$HOME/cloudflared.log" 2>&1 &
 
             echo "Waiting for Cloudflare tunnel URL..."
-            sleep 10
+            sleep 15
 
             cat "$HOME/cloudflared.log" || true
 
+            TUNNEL_URL=$(grep -o 'https://[-a-zA-Z0-9.]*\.trycloudflare\.com' "$HOME/cloudflared.log" | head -n 1)
+
             echo ""
             echo "=================================================="
-            echo "Open the trycloudflare.com URL above in your browser."
-            echo "VNC password: ${VNC_PASSWORD:-circleci123}"
+            echo "Open this URL:"
+            echo "$TUNNEL_URL"
+            echo ""
+            echo "Direct noVNC URL:"
+            echo "$TUNNEL_URL/vnc.html?autoconnect=true&resize=scale&password=ci123456"
+            echo ""
+            echo "If it still asks for a password, use:"
+            echo "ci123456"
             echo "=================================================="
             echo ""
 
