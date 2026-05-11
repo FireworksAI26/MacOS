@@ -10,34 +10,50 @@ jobs:
       - checkout
 
       - run:
-          name: Show Mac info
+          name: Show macOS machine info
           command: |
-            sw_vers
-            uname -a
+            echo "User info:"
             whoami
             echo "$USER"
+            id
+
+            echo ""
+            echo "macOS info:"
+            sw_vers
+            uname -a
+
+            echo ""
+            echo "Hardware info:"
             system_profiler SPHardwareDataType || true
+
+            echo ""
+            echo "Xcode info:"
             xcodebuild -version
 
       - run:
-          name: Install noVNC, websockify, and cloudflared
+          name: Install noVNC, websockify, and Cloudflare Tunnel
           command: |
             brew update
-            brew install cloudflared python3
-
-            python3 -m pip install --user websockify
+            brew install cloudflared python3 git
 
             rm -rf "$HOME/noVNC"
             git clone https://github.com/novnc/noVNC.git "$HOME/noVNC"
 
+            rm -rf "$HOME/novnc-venv"
+            python3 -m venv "$HOME/novnc-venv"
+            "$HOME/novnc-venv/bin/python" -m pip install --upgrade pip
+            "$HOME/novnc-venv/bin/python" -m pip install websockify
+
+            echo "Installed noVNC and websockify."
+
       - run:
-          name: Enable macOS VNC / Screen Sharing
+          name: Enable macOS Screen Sharing / VNC
           command: |
-            # macOS VNC legacy passwords should be 8 chars or fewer
+            # macOS legacy VNC passwords should be 8 characters or fewer.
             export VNC_PASSWORD="ci123456"
 
             echo "Using internal VNC password: $VNC_PASSWORD"
-            echo "Current user: $USER"
+            echo "Current macOS user: $USER"
 
             sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
               -activate \
@@ -58,66 +74,76 @@ jobs:
             sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
               -restart -agent
 
-            echo "Checking VNC port:"
+            echo ""
+            echo "Checking VNC port 5900:"
             lsof -i :5900 || true
 
       - run:
-          name: Create passwordless noVNC launcher
+          name: Create no-password noVNC launcher page
           command: |
-            cat > "$HOME/noVNC/index.html" <<'EOF'
-            <!doctype html>
-            <html>
-              <head>
-                <meta charset="utf-8">
-                <title>CircleCI macOS noVNC</title>
-                <style>
-                  body {
-                    margin: 0;
-                    background: #0b1020;
-                    color: white;
-                    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-                    display: flex;
-                    min-height: 100vh;
-                    align-items: center;
-                    justify-content: center;
-                    text-align: center;
-                  }
-                  .box {
-                    max-width: 720px;
-                    padding: 32px;
-                  }
-                  a {
-                    color: #8ab4ff;
-                    font-size: 20px;
-                  }
-                </style>
-              </head>
-              <body>
-                <div class="box">
-                  <h1>Opening CircleCI macOS VM...</h1>
-                  <p>If it does not open automatically, click below:</p>
-                  <p>
-                    <a href="/vnc.html?autoconnect=true&resize=scale&password=ci123456">
-                      Open noVNC
-                    </a>
-                  </p>
-                </div>
+            python3 -c '
+from pathlib import Path
 
-                <script>
-                  window.location.href = "/vnc.html?autoconnect=true&resize=scale&password=ci123456";
-                </script>
-              </body>
-            </html>
-            EOF
+html = """<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>CircleCI macOS noVNC</title>
+    <style>
+      body {
+        margin: 0;
+        background: #0b1020;
+        color: white;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        display: flex;
+        min-height: 100vh;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+      }
+      .box {
+        max-width: 720px;
+        padding: 32px;
+      }
+      a {
+        color: #8ab4ff;
+        font-size: 20px;
+      }
+      code {
+        background: #1f2937;
+        padding: 4px 8px;
+        border-radius: 6px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="box">
+      <h1>Opening CircleCI macOS VM...</h1>
+      <p>This page should auto-connect to noVNC.</p>
+      <p>If it does not open automatically, click:</p>
+      <p>
+        <a href="/vnc.html?autoconnect=true&resize=scale&password=ci123456">
+          Open noVNC
+        </a>
+      </p>
+      <p>If it still asks for a password, use <code>ci123456</code>.</p>
+    </div>
 
-            echo "Created noVNC launcher page."
+    <script>
+      window.location.href = "/vnc.html?autoconnect=true&resize=scale&password=ci123456";
+    </script>
+  </body>
+</html>
+"""
+
+Path.home().joinpath("noVNC", "index.html").write_text(html)
+print("Created launcher at ~/noVNC/index.html")
+'
 
       - run:
-          name: Start noVNC
+          name: Start noVNC server
           command: |
-            export PATH="$HOME/Library/Python/3.*/bin:$PATH"
-
-            nohup python3 -m websockify \
+            nohup "$HOME/novnc-venv/bin/websockify" \
               --web "$HOME/noVNC" \
               6080 \
               localhost:5900 \
@@ -125,9 +151,10 @@ jobs:
 
             sleep 5
 
-            echo "Checking noVNC port:"
+            echo "Checking noVNC port 6080:"
             lsof -i :6080 || true
 
+            echo ""
             echo "noVNC logs:"
             cat "$HOME/novnc.log" || true
 
@@ -140,33 +167,63 @@ jobs:
               > "$HOME/cloudflared.log" 2>&1 &
 
             echo "Waiting for Cloudflare tunnel URL..."
-            sleep 15
 
+            for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+              sleep 5
+              TUNNEL_URL=$(grep -o 'https://[-a-zA-Z0-9.]*\.trycloudflare\.com' "$HOME/cloudflared.log" | head -n 1 || true)
+
+              if [ -n "$TUNNEL_URL" ]; then
+                break
+              fi
+
+              echo "Still waiting for tunnel URL..."
+              cat "$HOME/cloudflared.log" || true
+            done
+
+            echo ""
+            echo "Cloudflare logs:"
             cat "$HOME/cloudflared.log" || true
 
-            TUNNEL_URL=$(grep -o 'https://[-a-zA-Z0-9.]*\.trycloudflare\.com' "$HOME/cloudflared.log" | head -n 1)
+            TUNNEL_URL=$(grep -o 'https://[-a-zA-Z0-9.]*\.trycloudflare\.com' "$HOME/cloudflared.log" | head -n 1 || true)
 
             echo ""
             echo "=================================================="
-            echo "Open this URL:"
-            echo "$TUNNEL_URL"
-            echo ""
-            echo "Direct noVNC URL:"
-            echo "$TUNNEL_URL/vnc.html?autoconnect=true&resize=scale&password=ci123456"
-            echo ""
-            echo "If it still asks for a password, use:"
-            echo "ci123456"
+            echo "CIRCLECI MACOS noVNC ACCESS"
+            echo "=================================================="
+
+            if [ -n "$TUNNEL_URL" ]; then
+              echo ""
+              echo "Open this URL:"
+              echo "$TUNNEL_URL"
+              echo ""
+              echo "Direct noVNC URL:"
+              echo "$TUNNEL_URL/vnc.html?autoconnect=true&resize=scale&password=ci123456"
+              echo ""
+              echo "Lite noVNC URL:"
+              echo "$TUNNEL_URL/vnc_lite.html?password=ci123456"
+              echo ""
+              echo "If it asks for a password, use:"
+              echo "ci123456"
+              echo ""
+            else
+              echo "ERROR: Could not find Cloudflare tunnel URL."
+              echo "Check the cloudflared logs above."
+              exit 1
+            fi
+
             echo "=================================================="
             echo ""
 
       - run:
-          name: Keep VM alive
+          name: Keep macOS VM alive
           no_output_timeout: 30m
           command: |
-            echo "Keeping CircleCI macOS VM alive for noVNC..."
-            echo "Stop the job manually when finished."
+            echo "Keeping CircleCI macOS VM alive for noVNC."
+            echo "Stop/cancel this job manually when finished."
+            echo ""
+
             while true; do
-              date
+              echo "VM still alive: $(date)"
               sleep 60
             done
 
