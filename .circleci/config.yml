@@ -51,31 +51,51 @@ jobs:
           command: |
             export VNC_PASSWORD="ci123456"
 
-            echo "Using internal VNC password: $VNC_PASSWORD"
+            echo "Using VNC password: $VNC_PASSWORD"
             echo "Current macOS user: $USER"
 
+            echo ""
+            echo "Resetting Remote Management first..."
+            sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
+              -deactivate \
+              -stop || true
+
+            sleep 5
+
+            echo ""
+            echo "Activating Remote Management..."
             sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
               -activate \
               -configure \
               -access -on \
               -users "$USER" \
               -privs -all \
-              -restart \
               -agent \
               -menu
 
+            echo ""
+            echo "Enabling legacy VNC password auth..."
             sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
               -configure \
               -clientopts \
               -setvnclegacy -vnclegacy yes \
-              -setvncpw "$VNC_PASSWORD"
+              -setvncpw -vncpw "$VNC_PASSWORD"
 
+            echo ""
+            echo "Restarting Remote Management agent..."
             sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
-              -restart -agent
+              -restart \
+              -agent
+
+            sleep 8
 
             echo ""
             echo "Checking VNC port 5900:"
             lsof -i :5900 || true
+
+            echo ""
+            echo "VNC password is:"
+            echo "$VNC_PASSWORD"
 
       - run:
           name: Start noVNC server
@@ -136,11 +156,14 @@ jobs:
               echo "Open this direct noVNC URL:"
               echo "$TUNNEL_URL/vnc.html?autoconnect=true&resize=scale&password=ci123456"
               echo ""
-              echo "If the direct link fails, open this:"
+              echo "If that does not work, open this lite version:"
               echo "$TUNNEL_URL/vnc_lite.html"
               echo ""
-              echo "Fallback password:"
+              echo "Password:"
               echo "ci123456"
+              echo ""
+              echo "Username, if asked:"
+              echo "$USER"
               echo ""
             else
               echo "ERROR: Could not find Cloudflare tunnel URL."
