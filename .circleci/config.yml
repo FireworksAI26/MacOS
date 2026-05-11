@@ -1,7 +1,10 @@
 version: 2.1
 
+orbs:
+  macos: circleci/macos@2
+
 jobs:
-  macos-novnc:
+  macos-vnc:
     macos:
       xcode: 16.4.0
     resource_class: m4pro.medium
@@ -10,184 +13,30 @@ jobs:
       - checkout
 
       - run:
-          name: Show macOS machine info
+          name: Show macOS info
           command: |
-            echo "User info:"
-            whoami
-            echo "$USER"
-            id
-
-            echo ""
-            echo "macOS info:"
             sw_vers
             uname -a
-
-            echo ""
-            echo "Hardware info:"
-            system_profiler SPHardwareDataType || true
-
-            echo ""
-            echo "Xcode info:"
+            whoami
             xcodebuild -version
 
-      - run:
-          name: Install noVNC, websockify, and Cloudflare Tunnel
-          command: |
-            brew update
-            brew install cloudflared python3 git
-
-            rm -rf "$HOME/noVNC"
-            git clone https://github.com/novnc/noVNC.git "$HOME/noVNC"
-
-            rm -rf "$HOME/novnc-venv"
-            python3 -m venv "$HOME/novnc-venv"
-            "$HOME/novnc-venv/bin/python" -m pip install --upgrade pip
-            "$HOME/novnc-venv/bin/python" -m pip install websockify
-
-            echo "Installed noVNC and websockify."
+      - macos/enable-vnc:
+          username: vncuser
+          password: ci123456
 
       - run:
-          name: Enable macOS Screen Sharing and VNC
-          command: |
-            export VNC_PASSWORD="ci123456"
-
-            echo "Using VNC password: $VNC_PASSWORD"
-            echo "Current macOS user: $USER"
-
-            echo ""
-            echo "Resetting Remote Management first..."
-            sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
-              -deactivate \
-              -stop || true
-
-            sleep 5
-
-            echo ""
-            echo "Activating Remote Management..."
-            sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
-              -activate \
-              -configure \
-              -access -on \
-              -users "$USER" \
-              -privs -all \
-              -agent \
-              -menu
-
-            echo ""
-            echo "Enabling legacy VNC password auth..."
-            sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
-              -configure \
-              -clientopts \
-              -setvnclegacy -vnclegacy yes \
-              -setvncpw -vncpw "$VNC_PASSWORD"
-
-            echo ""
-            echo "Restarting Remote Management agent..."
-            sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
-              -restart \
-              -agent
-
-            sleep 8
-
-            echo ""
-            echo "Checking VNC port 5900:"
-            lsof -i :5900 || true
-
-            echo ""
-            echo "VNC password is:"
-            echo "$VNC_PASSWORD"
-
-      - run:
-          name: Start noVNC server
-          command: |
-            nohup "$HOME/novnc-venv/bin/websockify" \
-              --web "$HOME/noVNC" \
-              6080 \
-              localhost:5900 \
-              > "$HOME/novnc.log" 2>&1 &
-
-            sleep 5
-
-            echo "Checking noVNC port 6080:"
-            lsof -i :6080 || true
-
-            echo ""
-            echo "noVNC logs:"
-            cat "$HOME/novnc.log" || true
-
-      - run:
-          name: Start public Cloudflare tunnel
-          command: |
-            nohup cloudflared tunnel \
-              --url http://localhost:6080 \
-              --no-autoupdate \
-              > "$HOME/cloudflared.log" 2>&1 &
-
-            echo "Waiting for Cloudflare tunnel URL..."
-
-            TUNNEL_URL=""
-
-            for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
-              sleep 5
-
-              TUNNEL_URL=$(grep -o 'https://[-a-zA-Z0-9.]*\.trycloudflare\.com' "$HOME/cloudflared.log" | head -n 1 || true)
-
-              if [ -n "$TUNNEL_URL" ]; then
-                break
-              fi
-
-              echo "Still waiting for tunnel URL..."
-              cat "$HOME/cloudflared.log" || true
-            done
-
-            echo ""
-            echo "Cloudflare logs:"
-            cat "$HOME/cloudflared.log" || true
-
-            TUNNEL_URL=$(grep -o 'https://[-a-zA-Z0-9.]*\.trycloudflare\.com' "$HOME/cloudflared.log" | head -n 1 || true)
-
-            echo ""
-            echo "=================================================="
-            echo "CIRCLECI MACOS noVNC ACCESS"
-            echo "=================================================="
-
-            if [ -n "$TUNNEL_URL" ]; then
-              echo ""
-              echo "Open this direct noVNC URL:"
-              echo "$TUNNEL_URL/vnc.html?autoconnect=true&resize=scale&password=ci123456"
-              echo ""
-              echo "If that does not work, open this lite version:"
-              echo "$TUNNEL_URL/vnc_lite.html"
-              echo ""
-              echo "Password:"
-              echo "ci123456"
-              echo ""
-              echo "Username, if asked:"
-              echo "$USER"
-              echo ""
-            else
-              echo "ERROR: Could not find Cloudflare tunnel URL."
-              echo "Check the cloudflared logs above."
-              exit 1
-            fi
-
-            echo "=================================================="
-            echo ""
-
-      - run:
-          name: Keep macOS VM alive
+          name: Keep VM alive
           no_output_timeout: 30m
           command: |
-            echo "Keeping CircleCI macOS VM alive for noVNC."
-            echo "Stop or cancel this job manually when finished."
-            echo ""
-
+            echo "VNC is enabled."
+            echo "Username: vncuser"
+            echo "Password: ci123456"
             while true; do
-              echo "VM still alive: $(date)"
+              echo "VM alive: $(date)"
               sleep 60
             done
 
 workflows:
   test:
     jobs:
-      - macos-novnc
+      - macos-vnc
